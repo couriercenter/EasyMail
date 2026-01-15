@@ -1,14 +1,15 @@
 import os
-import shutil
 from flask import Flask, request, jsonify, send_from_directory, abort
 
 app = Flask(__name__)
 
-# Ρυθμίσεις
-# Στο Render (Free tier) τα αρχεία χάνονται αν επανεκκινήσει ο server,
-# αλλά για άμεση μεταφορά (Scan -> Print) μας αρκεί.
+# --- ΡΥΘΜΙΣΕΙΣ ---
+# Χρησιμοποιούμε /tmp ή τον τρέχοντα φάκελο. 
+# Στο Render (Free) τα αρχεία είναι προσωρινά, που είναι ΟΚ για εμάς.
 UPLOAD_FOLDER = os.path.join(os.getcwd(), 'uploads')
-API_KEY = os.environ.get("API_KEY", "EasyMailSecret123!")  # Default αν δεν οριστεί στο Render
+
+# Προσοχή: Πρέπει να ταιριάζει με τα scripts στο μαγαζί και στο γραφείο!
+API_KEY = os.environ.get("API_KEY", "EasyMailSecret") 
 
 # Δημιουργία φακέλου αν δεν υπάρχει
 if not os.path.exists(UPLOAD_FOLDER):
@@ -16,13 +17,14 @@ if not os.path.exists(UPLOAD_FOLDER):
 
 def check_auth():
     """Ελέγχει αν το API Key είναι σωστό"""
+    # Ελέγχουμε και Header και URL param για ευκολία
     key = request.headers.get("X-API-KEY") or request.args.get("key")
     if key != API_KEY:
         abort(401, description="Unauthorized: Wrong API Key")
 
 @app.route('/')
 def home():
-    return "✅ EasyMail Transfer Server is Running!"
+    return "✅ EasyMail Transfer Server is Running (Smart Logs Mode)!"
 
 # --- UPLOAD (Ανέβασμα αρχείου) ---
 @app.route('/api/upload', methods=['POST'])
@@ -37,22 +39,31 @@ def upload_file():
         return jsonify({"success": False, "message": "No selected file"}), 400
 
     if file:
-        # Save file
         filepath = os.path.join(UPLOAD_FOLDER, file.filename)
         file.save(filepath)
+        # 200 OK = Πράσινο στο Log (Ήρθε αρχείο!)
         return jsonify({
             "success": True, 
             "message": f"File {file.filename} uploaded successfully",
             "size": os.path.getsize(filepath)
-        })
+        }), 200
 
-# --- LIST (Λίστα αρχείων) ---
+# --- LIST (Λίστα αρχείων - ΜΕ SMART LOGIC) ---
 @app.route('/api/files', methods=['GET'])
 def list_files():
     check_auth()
     try:
         files = os.listdir(UPLOAD_FOLDER)
-        return jsonify({"success": True, "files": files})
+        
+        # --- Η ΑΛΛΑΓΗ: 404 αν είναι άδειο ---
+        if not files:
+             # 404 = Δεν βρήκα τίποτα (Άδειο).
+             # Στα logs του Render φαίνεται διαφορετικό χρώμα, άρα ξέρεις ότι είναι idle.
+            return jsonify({"success": True, "files": [], "message": "No files found"}), 404
+            
+        # 200 = Βρήκα αρχεία! (Πράσινο)
+        return jsonify({"success": True, "files": files}), 200
+        
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
@@ -73,13 +84,13 @@ def delete_file(filename):
     try:
         if os.path.exists(filepath):
             os.remove(filepath)
-            return jsonify({"success": True, "message": "Deleted"})
+            return jsonify({"success": True, "message": "Deleted"}), 200
         else:
             return jsonify({"success": False, "message": "File not found"}), 404
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
-# --- FLUSH (Διαγραφή ΟΛΩΝ - Για καθαρισμό) ---
+# --- FLUSH (Καθαρισμός) ---
 @app.route('/api/flush', methods=['POST', 'GET'])
 def flush_files():
     check_auth()
@@ -98,4 +109,6 @@ def flush_files():
         return jsonify({"success": False, "message": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    # Σημαντικό για το Render: Χρήση της σωστής πόρτας
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
